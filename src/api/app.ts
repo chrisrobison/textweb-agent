@@ -11,6 +11,7 @@ import { normalizeAndValidateUrl } from '../textweb/url-safety.js'
 import { SummarizationEngine } from '../summarizer/engine.js'
 import type { RenderRequest, RenderResult, SummarizeRequest, SummarizeResponse } from '../types/api.js'
 import type { PaymentProvider } from '../payments/payment-provider.js'
+import { openApiSpec, agentDefinition } from './spec.js'
 
 const CREDITS = {
   renderLive: 1,
@@ -391,6 +392,18 @@ export function createApp(deps: {
       service: 'textweb-agent',
       paymentProvider: deps.payments.mode,
       now: new Date().toISOString(),
+    })
+  })
+
+  app.get('/openapi.json', (_req: Request, res: Response) => {
+    res.json(openApiSpec)
+  })
+
+  app.get('/.well-known/agent.json', (req: Request, res: Response) => {
+    const baseUrl = `${req.protocol}://${req.get('host')}`
+    res.json({
+      ...agentDefinition,
+      spec_url: `${baseUrl}/openapi.json`,
     })
   })
 
