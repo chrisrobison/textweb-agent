@@ -241,7 +241,7 @@ async function run(kind){
       $('renderOutput').textContent = data.view || '(no view)'
       $('resultMeta').textContent = 'title=' + (data.title || '') + ' | source=' + ((data.meta && data.meta.source) || '') + ' | renderMs=' + ((data.meta && data.meta.renderMs) || '') + ' | links=' + ((data.links || []).length)
     } else {
-      const bullets = (data.summaryBullets || []).map(function(b){ return '• ' + b }).join('\n')
+      const bullets = (data.summaryBullets || []).map(function(b){ return '• ' + b }).join('\\n')
       $('renderOutput').textContent = bullets || '(no summary bullets)'
       $('resultMeta').textContent = 'cached=' + ((data.meta && data.meta.cached) || false) + ' | units=' + ((data.cost && data.cost.units) || '') + ' | credits=' + ((data.cost && data.cost.credits) || '') + ' | renderMs=' + ((data.meta && data.meta.renderMs) || '')
     }
