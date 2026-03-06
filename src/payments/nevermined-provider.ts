@@ -3,6 +3,7 @@ import { Payments } from '@nevermined-io/payments'
 import { paymentMiddleware } from '@nevermined-io/payments/express'
 
 import type { PaymentProvider, PaymentReservation } from './payment-provider.js'
+import { normalizeCreditUnits } from './credits.js'
 
 export class NeverminedPaymentProvider implements PaymentProvider {
   readonly mode = 'nevermined' as const
@@ -20,13 +21,23 @@ export class NeverminedPaymentProvider implements PaymentProvider {
     })
   }
 
+  describe(): Record<string, unknown> {
+    return {
+      mode: this.mode,
+      environment: this.options.environment,
+      planId: this.options.planId,
+      ...(this.options.agentId ? { agentId: this.options.agentId } : {}),
+      authHeader: 'payment-signature',
+    }
+  }
+
   middleware(routeCredits: Record<string, (req: Request) => number>): RequestHandler {
     const config: Record<string, { planId: string; credits: number | ((req: Request) => number); agentId?: string }> = {}
 
     for (const [routeKey, resolver] of Object.entries(routeCredits)) {
       config[routeKey] = {
         planId: this.options.planId,
-        credits: (req: Request) => resolver(req),
+        credits: (req: Request) => normalizeCreditUnits(resolver(req)),
         ...(this.options.agentId ? { agentId: this.options.agentId } : {}),
       }
     }

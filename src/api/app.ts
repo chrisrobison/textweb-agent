@@ -1,5 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from 'express'
 import cors from 'cors'
+import crypto from 'node:crypto'
 
 import { env } from '../config/env.js'
 import type { CacheStore } from '../cache/cache-store.js'
@@ -7,18 +8,18 @@ import { renderCacheKey, summarizeCacheKey } from '../cache/index.js'
 import { createRateLimiter } from './rate-limit.js'
 import { errorHandler, notFound } from './errors.js'
 import { TextWebAdapter } from '../textweb/adapter.js'
-import { normalizeAndValidateUrl } from '../textweb/url-safety.js'
 import { SummarizationEngine } from '../summarizer/engine.js'
 import type { RenderRequest, RenderResult, SummarizeRequest, SummarizeResponse } from '../types/api.js'
 import type { PaymentProvider } from '../payments/payment-provider.js'
 import { openApiSpec, agentDefinition } from './spec.js'
-
-const CREDITS = {
-  renderLive: 1,
-  renderCached: 1,
-  summarizeLive: 2,
-  summarizeCached: 1,
-}
+import { normalizeRenderBody, normalizeSummarizeBody } from './validation.js'
+import {
+  CREDIT_TO_TOKEN_RATIO,
+  CREDIT_UNITS,
+  normalizeCreditUnits,
+  selectRenderCredits,
+  selectSummarizeCredits,
+} from '../payments/credits.js'
 
 type RecentRequest = {
   at: string
@@ -296,9 +297,34 @@ export function createApp(deps: {
     if (stats.recentRequests.length > 20) stats.recentRequests.length = 20
   }
 
+  const withTimeout = async <T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timeout after ${timeoutMs}ms`)), timeoutMs)
+
+      fn()
+        .then((result) => {
+          clearTimeout(timer)
+          resolve(result)
+        })
+        .catch((error) => {
+          clearTimeout(timer)
+          reject(error)
+        })
+    })
+  }
+
+  const providerInfo = deps.payments.describe()
+
   app.use(cors())
-  app.use(express.json({ limit: '1mb' }))
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const requestId = req.header('x-request-id') || crypto.randomUUID()
+    ;(req as any).requestId = requestId
+    ;(req as any).requestStartedAt = Date.now()
+    res.setHeader('x-request-id', requestId)
+    next()
+  })
   app.use(createRateLimiter({ windowMs: env.RATE_LIMIT_WINDOW_MS, maxRequests: env.RATE_LIMIT_MAX_REQUESTS }))
+  app.use(express.json({ limit: env.MAX_REQUEST_BYTES }))
 
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.path === '/v1/render' || req.path === '/v1/summarize') {
@@ -308,13 +334,30 @@ export function createApp(deps: {
 
     res.on('finish', () => {
       if (req.path !== '/v1/render' && req.path !== '/v1/summarize') return
+      const durationMs = Date.now() - Number((req as any).requestStartedAt || Date.now())
       const code = String(res.statusCode)
       stats.statusCounts[code] = (stats.statusCounts[code] || 0) + 1
       if (res.statusCode === 402) stats.paymentRequired += 1
       if (res.statusCode >= 200 && res.statusCode < 300) stats.successful += 1
 
+      const pricedUnits = normalizeCreditUnits((req as any).pricingCredits, 0)
+      console.log(
+        JSON.stringify({
+          event: 'api_request',
+          requestId: (req as any).requestId,
+          method: req.method,
+          path: req.path,
+          status: res.statusCode,
+          durationMs,
+          paymentProvider: deps.payments.mode,
+          pricedUnits,
+          pricedCredits: pricedUnits * CREDIT_TO_TOKEN_RATIO,
+          cacheHit: Boolean((req as any).cacheHit),
+        }),
+      )
+
       if (res.statusCode >= 400) {
-        const units = Number((req as any).pricingCredits || 0)
+        const units = normalizeCreditUnits((req as any).pricingCredits, 0)
         const source = (req as any).cacheHit ? 'cache' : 'unknown'
         addRecent({
           at: new Date().toISOString(),
@@ -323,7 +366,7 @@ export function createApp(deps: {
           status: res.statusCode,
           source,
           units,
-          credits: units * 0.001,
+          credits: units * CREDIT_TO_TOKEN_RATIO,
           renderMs: null,
         })
       }
@@ -337,31 +380,19 @@ export function createApp(deps: {
 
     try {
       if (req.path === '/v1/render') {
-        const body = (req.body || {}) as RenderRequest
-        const url = normalizeAndValidateUrl(String(body.url || ''))
-        const follow = body.followLinks ?? { enabled: false, max: 0 }
-        const key = renderCacheKey(url, !!follow.enabled, Math.min(Math.max(follow.max || 0, 0), env.MAX_FOLLOW_LINKS))
-        const hit = body.cache !== false ? await deps.cache.get(key) : null
+        const request = normalizeRenderBody(req.body || {})
+        const key = renderCacheKey(request.url, !!request.followLinks?.enabled, request.followLinks?.max || 0)
+        const hit = request.cache ? await deps.cache.get(key) : null
 
+        ;(req as any).normalizedRenderRequest = request
         ;(req as any).cacheKey = key
         ;(req as any).cacheHit = Boolean(hit)
-        ;(req as any).normalizedUrl = url
-        ;(req as any).pricingCredits = hit ? CREDITS.renderCached : CREDITS.renderLive
+        ;(req as any).normalizedUrl = request.url
+        ;(req as any).pricingCredits = selectRenderCredits(Boolean(hit))
       }
 
       if (req.path === '/v1/summarize') {
-        const body = (req.body || {}) as SummarizeRequest
-        const request: SummarizeRequest = {
-          ...body,
-          url: normalizeAndValidateUrl(String(body.url || '')),
-          mode: body.mode ?? 'standard',
-          followLinks: {
-            enabled: body.followLinks?.enabled ?? false,
-            max: Math.min(Math.max(body.followLinks?.max || 0, 0), env.MAX_FOLLOW_LINKS),
-          },
-          cache: body.cache !== false,
-        }
-
+        const request = normalizeSummarizeBody(req.body || {})
         const key = summarizeCacheKey(request)
         const hit = request.cache ? await deps.cache.get(key) : null
 
@@ -370,19 +401,19 @@ export function createApp(deps: {
         ;(req as any).cacheHit = Boolean(hit)
         ;(req as any).cachedResponse = hit ?? null
         ;(req as any).normalizedUrl = request.url
-        ;(req as any).pricingCredits = hit ? CREDITS.summarizeCached : CREDITS.summarizeLive
+        ;(req as any).pricingCredits = selectSummarizeCredits(Boolean(hit))
       }
 
       next()
-    } catch {
-      next()
+    } catch (error) {
+      next(error)
     }
   })
 
   app.use(
     deps.payments.middleware({
-      'POST /v1/render': (req: Request) => Number((req as any).pricingCredits || CREDITS.renderLive),
-      'POST /v1/summarize': (req: Request) => Number((req as any).pricingCredits || CREDITS.summarizeLive),
+      'POST /v1/render': (req: Request) => Number((req as any).pricingCredits || CREDIT_UNITS.renderLive),
+      'POST /v1/summarize': (req: Request) => Number((req as any).pricingCredits || CREDIT_UNITS.summarizeLive),
     }),
   )
 
@@ -391,6 +422,7 @@ export function createApp(deps: {
       status: 'ok',
       service: 'textweb-agent',
       paymentProvider: deps.payments.mode,
+      payment: providerInfo,
       now: new Date().toISOString(),
     })
   })
@@ -400,10 +432,12 @@ export function createApp(deps: {
   })
 
   app.get('/.well-known/agent.json', (req: Request, res: Response) => {
-    const baseUrl = `${req.protocol}://${req.get('host')}`
+    const protocol = req.get('x-forwarded-proto') || req.protocol
+    const baseUrl = `${protocol}://${req.get('host')}`
     res.json({
       ...agentDefinition,
       spec_url: `${baseUrl}/openapi.json`,
+      payment: providerInfo,
     })
   })
 
@@ -423,15 +457,14 @@ export function createApp(deps: {
     let reservation: any = null
     try {
       await deps.payments.validateRequest(req)
-      reservation = await deps.payments.reserve(req, Number((req as any).pricingCredits || CREDITS.renderLive))
+      reservation =
+        res.locals.paymentReservation ||
+        (await deps.payments.reserve(req, Number((req as any).pricingCredits || CREDIT_UNITS.renderLive)))
 
-      const body = (req.body || {}) as RenderRequest
-      const url = normalizeAndValidateUrl(String(body.url || ''))
-      const followLinks = {
-        enabled: body.followLinks?.enabled ?? false,
-        max: Math.min(Math.max(body.followLinks?.max || 0, 0), env.MAX_FOLLOW_LINKS),
-      }
-      const cacheEnabled = body.cache !== false
+      const request = ((req as any).normalizedRenderRequest || normalizeRenderBody(req.body || {})) as RenderRequest
+      const url = request.url
+      const followLinks = request.followLinks ?? { enabled: false, max: 0 }
+      const cacheEnabled = request.cache !== false
       const cacheKey = (req as any).cacheKey as string | undefined
 
       let render = cacheEnabled && cacheKey ? await deps.cache.get<RenderResult>(cacheKey) : null
@@ -465,9 +498,10 @@ export function createApp(deps: {
 
       stats.renderRequests += 1
       stats.pagesServed += 1
-      const thisUnits = Number((req as any).pricingCredits || CREDITS.renderLive)
+      const thisUnits = Number((req as any).pricingCredits || CREDIT_UNITS.renderLive)
+      const thisCredits = thisUnits * CREDIT_TO_TOKEN_RATIO
       stats.unitsBilled += thisUnits
-      stats.creditsBilled += thisUnits * 0.001
+      stats.creditsBilled += thisCredits
       const n = stats.renderRequests
       stats.avgRenderMs = n === 1 ? render.meta.renderMs : ((stats.avgRenderMs * (n - 1)) + render.meta.renderMs) / n
 
@@ -483,7 +517,7 @@ export function createApp(deps: {
         status: 200,
         source: render.meta.source,
         units: thisUnits,
-        credits: thisUnits * 0.001,
+        credits: thisCredits,
         renderMs: render.meta.renderMs,
       })
 
@@ -498,14 +532,11 @@ export function createApp(deps: {
     let reservation: any = null
     try {
       await deps.payments.validateRequest(req)
-      reservation = await deps.payments.reserve(req, Number((req as any).pricingCredits || CREDITS.summarizeLive))
+      reservation =
+        res.locals.paymentReservation ||
+        (await deps.payments.reserve(req, Number((req as any).pricingCredits || CREDIT_UNITS.summarizeLive)))
 
-      const body = (req.body || {}) as SummarizeRequest
-      const request = ((req as any).normalizedRequest || body) as SummarizeRequest
-      request.url = normalizeAndValidateUrl(request.url)
-      request.mode = request.mode ?? 'standard'
-      request.followLinks = request.followLinks ?? { enabled: false, max: 0 }
-      request.cache = request.cache !== false
+      const request = ((req as any).normalizedRequest || normalizeSummarizeBody(req.body || {})) as SummarizeRequest
 
       const cached = (req as any).cachedResponse as SummarizeResponse | null
       const cacheKey = (req as any).cacheKey as string | undefined
@@ -516,9 +547,10 @@ export function createApp(deps: {
 
         stats.summarizeRequests += 1
         stats.pagesServed += 1
-        const thisUnits = CREDITS.summarizeCached
+        const thisUnits = selectSummarizeCredits(true)
+        const thisCredits = thisUnits * CREDIT_TO_TOKEN_RATIO
         stats.unitsBilled += thisUnits
-        stats.creditsBilled += thisUnits * 0.001
+        stats.creditsBilled += thisCredits
         stats.uniqueUrls.add(request.url)
 
         await deps.payments.commit(req, reservation)
@@ -530,15 +562,15 @@ export function createApp(deps: {
           status: 200,
           source: 'cache',
           units: thisUnits,
-          credits: thisUnits * 0.001,
+          credits: thisCredits,
           renderMs: cached.meta?.renderMs ?? null,
         })
 
         res.json({
           ...cached,
           cost: {
-            units: CREDITS.summarizeCached,
-            credits: CREDITS.summarizeCached * 0.001,
+            units: selectSummarizeCredits(true),
+            credits: selectSummarizeCredits(true) * CREDIT_TO_TOKEN_RATIO,
           },
           meta: {
             ...cached.meta,
@@ -550,7 +582,11 @@ export function createApp(deps: {
 
       const render = await deps.adapter.render(request.url, { followLinks: request.followLinks })
       const summarizeStartedAt = Date.now()
-      const summarized = await deps.summarizer.summarize(request, render)
+      const summarized = await withTimeout(
+        () => deps.summarizer.summarize(request, render),
+        env.OPENAI_TIMEOUT_MS,
+        'Summarization',
+      )
 
       const response: SummarizeResponse = {
         url: request.url,
@@ -561,8 +597,8 @@ export function createApp(deps: {
         links: summarized.links,
         extracted: summarized.extracted,
         cost: {
-          units: CREDITS.summarizeLive,
-          credits: CREDITS.summarizeLive * 0.001,
+          units: selectSummarizeCredits(false),
+          credits: selectSummarizeCredits(false) * CREDIT_TO_TOKEN_RATIO,
         },
         meta: {
           renderMs: render.renderMs,
@@ -585,9 +621,10 @@ export function createApp(deps: {
       stats.liveResponses += 1
       stats.summarizeRequests += 1
       stats.pagesServed += 1
-      const thisUnits = CREDITS.summarizeLive
+      const thisUnits = selectSummarizeCredits(false)
+      const thisCredits = thisUnits * CREDIT_TO_TOKEN_RATIO
       stats.unitsBilled += thisUnits
-      stats.creditsBilled += thisUnits * 0.001
+      stats.creditsBilled += thisCredits
       stats.uniqueUrls.add(request.url)
 
       await deps.payments.commit(req, reservation)
@@ -599,7 +636,7 @@ export function createApp(deps: {
         status: 200,
         source: 'live',
         units: thisUnits,
-        credits: thisUnits * 0.001,
+        credits: thisCredits,
         renderMs: response.meta?.renderMs ?? null,
       })
 

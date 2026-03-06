@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 
 import { env } from '../config/env.js'
-import { normalizeAndValidateUrl } from './url-safety.js'
+import { assertSafeResolvedAddress, normalizeAndValidateUrl } from './url-safety.js'
 
 const require = createRequire(import.meta.url)
 const { AgentBrowser } = require('textweb') as { AgentBrowser: new (opts: any) => any }
@@ -37,6 +37,7 @@ export class TextWebAdapter {
 
   async render(urlInput: string, options?: { followLinks?: { enabled: boolean; max: number } }): Promise<RenderedPage> {
     const url = normalizeAndValidateUrl(urlInput)
+    await assertSafeResolvedAddress(url)
     const startedAt = Date.now()
 
     const primary = await this.withTimeout<RawResult>(() => this.browser.navigate(url), env.REQUEST_TIMEOUT_MS)
@@ -52,6 +53,7 @@ export class TextWebAdapter {
     for (const candidate of primaryResult.links.slice(0, max)) {
       try {
         const target = normalizeAndValidateUrl(candidate.href)
+        await assertSafeResolvedAddress(target)
         const result = await this.withTimeout<RawResult>(
           () => this.browser.navigate(target),
           Math.min(env.REQUEST_TIMEOUT_MS, 15000),

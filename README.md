@@ -108,6 +108,14 @@ Use the scripted smoke/demo flow:
 ./scripts/demo-smoke.sh
 ```
 
+For deployed verification (Nevermined token or dummy key):
+
+```bash
+BASE_URL=https://your-domain \
+PAYMENT_SIGNATURE=<x402-token> \
+./scripts/deployed-smoke.sh
+```
+
 It demonstrates:
 
 1. payment gating (`402` when unpaid)
@@ -136,8 +144,20 @@ See `.env.example`.
 
 Important:
 
+- Direct HTTPS on Node is optional. Set `HTTPS_KEY_PATH` and `HTTPS_CERT_PATH` to enable TLS (optionally `HTTPS_CA_PATH`).
+  - Let's Encrypt example: `HTTPS_KEY_PATH=/etc/letsencrypt/live/textweb.net/privkey.pem`, `HTTPS_CERT_PATH=/etc/letsencrypt/live/textweb.net/fullchain.pem`
+
 - `PAYMENT_PROVIDER=nevermined` requires `NVM_API_KEY` and `NVM_PLAN_ID`
 - `PAYMENT_PROVIDER=dummy` requires `DUMMY_API_KEY` and uses `x-api-key` header
+- `URL_ALLOWLIST` supports exact hosts and wildcards (for example `example.com,*.trusted.site`)
+- `BLOCK_PRIVATE_NETWORKS=true` blocks private/loopback IP resolution (SSRF protection)
+- `MAX_SCHEMA_BYTES` caps extraction schema payload size for `/v1/summarize`
+
+## Tests
+
+```bash
+npm test
+```
 
 ## curl examples
 
@@ -216,6 +236,9 @@ const result = await web.summarize({
   url: 'https://example.com',
   mode: 'deep'
 })
+
+// Optional: inspect resolved auth headers before a custom fetch call
+const headers = await web.getAuthHeaders()
 ```
 
 ## Notes on pricing and cache

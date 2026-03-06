@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { createServer as createHttpsServer } from 'node:https'
 import { env } from './config/env.js'
 import { createCacheStore } from './cache/index.js'
 import { createPaymentProvider } from './payments/index.js'
@@ -18,11 +20,25 @@ async function main() {
     adapter,
   })
 
-  const server = app.listen(env.PORT, () => {
-    console.log(`TEXTWEB AGENT listening on http://localhost:${env.PORT}`)
-    console.log(`Payment provider: ${payments.mode}`)
-    console.log('Endpoints: POST /v1/render, POST /v1/summarize, GET /healthz')
-  })
+  const tlsEnabled = !!(env.HTTPS_KEY_PATH && env.HTTPS_CERT_PATH)
+  const server = tlsEnabled
+    ? createHttpsServer(
+        {
+          key: readFileSync(env.HTTPS_KEY_PATH!),
+          cert: readFileSync(env.HTTPS_CERT_PATH!),
+          ...(env.HTTPS_CA_PATH ? { ca: readFileSync(env.HTTPS_CA_PATH) } : {}),
+        },
+        app
+      ).listen(env.PORT, () => {
+        console.log(`TEXTWEB AGENT listening on https://localhost:${env.PORT}`)
+        console.log(`Payment provider: ${payments.mode}`)
+        console.log('Endpoints: POST /v1/render, POST /v1/summarize, GET /healthz')
+      })
+    : app.listen(env.PORT, () => {
+        console.log(`TEXTWEB AGENT listening on http://localhost:${env.PORT}`)
+        console.log(`Payment provider: ${payments.mode}`)
+        console.log('Endpoints: POST /v1/render, POST /v1/summarize, GET /healthz')
+      })
 
   const shutdown = async () => {
     server.close()

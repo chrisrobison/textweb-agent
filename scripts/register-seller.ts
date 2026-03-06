@@ -8,6 +8,13 @@ const payments = Payments.getInstance({
 });
 
 async function main() {
+  const baseUrl = (process.env.AGENT_BASE_URL || "https://textweb.net:1015").replace(/\/$/, "");
+  const renderEndpoint = `${baseUrl}/v1/render`;
+  const summarizeEndpoint = `${baseUrl}/v1/summarize`;
+  const healthEndpoint = `${baseUrl}/healthz`;
+  const specUrl = `${baseUrl}/openapi.json`;
+  const agentJsonUrl = `${baseUrl}/.well-known/agent.json`;
+
   const creditsConfig = payments.plans.getFixedCreditsConfig(1000n, 1n);
   const priceConfig = payments.plans.getFiatPriceConfig(
     1000n, // $10.00 if cents
@@ -21,8 +28,11 @@ async function main() {
     } as AgentMetadata,
     {
       endpoints: [
-        { POST: "https://your-domain.com/v1/render" },
-        { POST: "https://your-domain.com/v1/summarize" },
+        { POST: renderEndpoint },
+        { POST: summarizeEndpoint },
+        { GET: healthEndpoint },
+        { GET: specUrl },
+        { GET: agentJsonUrl },
       ],
     } as AgentAPIAttributes,
     {
@@ -35,6 +45,13 @@ async function main() {
 
   console.log("Agent ID:", result.agentId);
   console.log("Plan ID:", result.planId);
+  console.log("Environment:", process.env.NVM_ENVIRONMENT || "sandbox");
+  console.log("Registered endpoints:");
+  console.log(`- ${renderEndpoint}`);
+  console.log(`- ${summarizeEndpoint}`);
+  console.log(`- ${healthEndpoint}`);
+  console.log(`- ${specUrl}`);
+  console.log(`- ${agentJsonUrl}`);
 }
 
 main().catch(console.error);

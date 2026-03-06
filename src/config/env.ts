@@ -21,11 +21,22 @@ const envSchema = z.object({
   CACHE_TTL_SECONDS: z.coerce.number().default(1800),
 
   REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
+  OPENAI_TIMEOUT_MS: z.coerce.number().default(20000),
+  MAX_REQUEST_BYTES: z.coerce.number().default(1048576),
+  MAX_URL_LENGTH: z.coerce.number().default(2048),
   MAX_RENDER_CHARS: z.coerce.number().default(30000),
   MAX_FOLLOW_LINKS: z.coerce.number().default(3),
   MAX_RESPONSE_CHARS: z.coerce.number().default(12000),
+  MAX_SCHEMA_BYTES: z.coerce.number().default(32768),
+  DNS_LOOKUP_TIMEOUT_MS: z.coerce.number().default(3000),
+  URL_ALLOWLIST: z.string().optional(),
+  BLOCK_PRIVATE_NETWORKS: z.coerce.boolean().default(true),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(60),
+
+  HTTPS_KEY_PATH: z.string().optional(),
+  HTTPS_CERT_PATH: z.string().optional(),
+  HTTPS_CA_PATH: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)
@@ -39,4 +50,8 @@ if (env.PAYMENT_PROVIDER === 'nevermined') {
   if (!env.NVM_API_KEY || !env.NVM_PLAN_ID) {
     throw new Error('NVM_API_KEY and NVM_PLAN_ID are required when PAYMENT_PROVIDER=nevermined')
   }
+}
+
+if ((env.HTTPS_KEY_PATH && !env.HTTPS_CERT_PATH) || (!env.HTTPS_KEY_PATH && env.HTTPS_CERT_PATH)) {
+  throw new Error('HTTPS_KEY_PATH and HTTPS_CERT_PATH must be set together')
 }

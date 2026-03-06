@@ -7,6 +7,7 @@ export interface PaymentReservation {
 
 export interface PaymentProvider {
   readonly mode: 'nevermined' | 'dummy'
+  describe(): Record<string, unknown>
   middleware(routeCredits: Record<string, (req: Request) => number>): RequestHandler
   validateRequest(req: Request): Promise<void>
   reserve(req: Request, credits: number): Promise<PaymentReservation>

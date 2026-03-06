@@ -15,9 +15,13 @@ export function createRateLimiter(options: { windowMs: number; maxRequests: numb
     }
 
     if (current.count >= options.maxRequests) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000))
+      res.setHeader('retry-after', String(retryAfterSeconds))
       res.status(429).json({
-        error: 'Rate limit exceeded',
+        error: 'Request failed',
         message: `Max ${options.maxRequests} requests per ${Math.ceil(options.windowMs / 1000)}s`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        ...(typeof (req as any).requestId === 'string' ? { requestId: (req as any).requestId } : {}),
       })
       return
     }

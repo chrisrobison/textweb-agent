@@ -12,7 +12,9 @@
     "build": "tsc -p tsconfig.json && npm run -w @textweb/client build",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "demo:smoke": "bash ./scripts/demo-smoke.sh"
+    "test": "tsx --test test/**/*.test.ts",
+    "demo:smoke": "bash ./scripts/demo-smoke.sh",
+    "demo:smoke:deployed": "bash ./scripts/deployed-smoke.sh"
   },
   "dependencies": {
     "@nevermined-io/payments": "1.1.5",
