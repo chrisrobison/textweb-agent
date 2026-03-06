@@ -1,6 +1,7 @@
 import express, { type Request, type Response, type NextFunction } from 'express'
 import cors from 'cors'
 import crypto from 'node:crypto'
+import { Payments } from '@nevermined-io/payments'
 
 import { env } from '../config/env.js'
 import type { CacheStore } from '../cache/cache-store.js'
@@ -89,8 +90,15 @@ const dashboardHtml = `<!doctype html>
   <div class="grid">
     <div class="card">
       <h2>Render Request</h2>
+      <label>Payment Mode</label>
+      <select id="paymentMode">
+        <option value="dummy">dummy (x-api-key)</option>
+        <option value="x402">x402 (payment-signature)</option>
+      </select>
       <label>API Key</label>
       <input id="apiKey" value="dev-textweb-key" />
+      <label>x402 Payment Signature</label>
+      <textarea id="paymentSignature" rows="3" placeholder="paste x402 access token"></textarea>
       <label>URL</label>
       <input id="url" value="https://example.com" />
       <div class="row">
@@ -109,6 +117,28 @@ const dashboardHtml = `<!doctype html>
         <button id="renderBtn">Render Page</button>
         <button id="summBtn">Summarize</button>
       </div>
+      <h2 style="margin-top:14px;">x402 Token Helper (Buyer-side)</h2>
+      <label>Subscriber NVM API Key</label>
+      <input id="buyerNvmApiKey" placeholder="sandbox:..." />
+      <div class="row">
+        <div>
+          <label>Plan ID</label>
+          <input id="buyerPlanId" placeholder="Nevermined plan ID" />
+        </div>
+        <div>
+          <label>Environment</label>
+          <select id="buyerEnvironment">
+            <option value="sandbox">sandbox</option>
+            <option value="production">production</option>
+          </select>
+        </div>
+      </div>
+      <label>Agent ID (optional)</label>
+      <input id="buyerAgentId" placeholder="optional agent id" />
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button id="genX402Btn" type="button">Generate x402 Token</button>
+      </div>
+      <p class="meta" id="x402StatusLine">x402 helper idle.</p>
       <p class="meta" id="statusLine">Ready.</p>
       <div class="meta" id="resultMeta"></div>
     </div>
@@ -204,7 +234,9 @@ async function loadStats(){
 
 async function run(kind){
   const url = $('url').value.trim()
+  const paymentMode = $('paymentMode').value
   const apiKey = $('apiKey').value.trim()
+  const paymentSignature = $('paymentSignature').value.trim()
   const followEnabled = $('followEnabled').value === 'true'
   const followMax = Number($('followMax').value || 0)
   const cache = $('cache').value === 'true'
@@ -216,10 +248,22 @@ async function run(kind){
     ? { url, followLinks: { enabled: followEnabled, max: followMax }, cache }
     : { url, mode: 'brief', followLinks: { enabled: followEnabled, max: followMax }, cache }
 
+  const headers = { 'content-type': 'application/json' }
+  if (paymentMode === 'x402') {
+    if (!paymentSignature) {
+      $('statusLine').textContent = 'Missing x402 payment-signature token'
+      $('statusLine').className = 'meta warn'
+      return
+    }
+    headers['payment-signature'] = paymentSignature
+  } else {
+    headers['x-api-key'] = apiKey
+  }
+
   try {
     const res = await fetch('/v1/' + kind, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+      headers,
       body: JSON.stringify(body)
     })
 
@@ -256,8 +300,56 @@ async function run(kind){
   }
 }
 
+async function generateX402Token(){
+  const nvmApiKey = $('buyerNvmApiKey').value.trim()
+  const planId = $('buyerPlanId').value.trim()
+  const agentId = $('buyerAgentId').value.trim()
+  const environment = $('buyerEnvironment').value
+
+  if (!nvmApiKey || !planId) {
+    $('x402StatusLine').textContent = 'Need subscriber NVM API key + plan ID'
+    $('x402StatusLine').className = 'meta warn'
+    return
+  }
+
+  $('x402StatusLine').textContent = 'Generating x402 token...'
+  $('x402StatusLine').className = 'meta'
+
+  try {
+    const res = await fetch('/dashboard/x402/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        nvmApiKey,
+        planId,
+        environment,
+        agentId: agentId || undefined,
+      }),
+    })
+
+    const text = await res.text()
+    let data = {}
+    try { data = JSON.parse(text) } catch { data = { raw: text } }
+
+    if (!res.ok) {
+      $('x402StatusLine').textContent = 'Token generation failed: HTTP ' + res.status
+      $('x402StatusLine').className = 'meta warn'
+      return
+    }
+
+    $('paymentMode').value = 'x402'
+    $('paymentSignature').value = data.accessToken || ''
+    $('x402StatusLine').textContent = 'x402 token generated and loaded.'
+    $('x402StatusLine').className = 'meta ok'
+  } catch (err) {
+    $('x402StatusLine').textContent = 'Token generation failed: ' + String(err)
+    $('x402StatusLine').className = 'meta warn'
+  }
+}
+
 $('renderBtn').addEventListener('click', () => run('render'))
 $('summBtn').addEventListener('click', () => run('summarize'))
+$('genX402Btn').addEventListener('click', generateX402Token)
 loadStats()
 setInterval(loadStats, 5000)
 </script>
@@ -451,6 +543,41 @@ export function createApp(deps: {
       uniqueUrls: stats.uniqueUrls.size,
       avgRenderMs: Math.round(stats.avgRenderMs),
     })
+  })
+
+  app.post('/dashboard/x402/token', async (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as {
+        nvmApiKey?: string
+        planId?: string
+        agentId?: string
+        environment?: string
+      }
+
+      const nvmApiKey = String(body.nvmApiKey || '').trim()
+      const planId = String(body.planId || '').trim()
+      const agentId = String(body.agentId || '').trim()
+      const environment = String(body.environment || 'sandbox').trim() || 'sandbox'
+
+      if (!nvmApiKey || !planId) {
+        res.status(400).json({ message: 'nvmApiKey and planId are required' })
+        return
+      }
+
+      const payments = Payments.getInstance({
+        nvmApiKey,
+        environment: environment as any,
+      })
+
+      const token = await payments.x402.getX402AccessToken(planId, agentId || undefined)
+      res.json({
+        accessToken: token.accessToken,
+      })
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : 'Failed to generate x402 token',
+      })
+    }
   })
 
   app.post('/v1/render', async (req: Request, res: Response, next: NextFunction) => {
