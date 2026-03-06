@@ -1,7 +1,7 @@
 export const openApiSpec = {
   openapi: '3.0.3',
   info: {
-    title: 'TEXTWEB SUMMARIZE AGENT API',
+    title: 'TEXTWEB AGENT API',
     version: '1.0.0',
     description: 'Paid TextWeb rendering and summarization API with Nevermined-compatible metering.',
   },
@@ -86,7 +86,7 @@ export const openApiSpec = {
 } as const
 
 export const agentDefinition = {
-  name: 'TEXTWEB SUMMARIZE AGENT',
+  name: 'TEXTWEB AGENT',
   version: '1.0.0',
   description: 'Seller agent that renders and summarizes webpages using TextWeb.',
   spec_url: '/openapi.json',

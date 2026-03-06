@@ -16,8 +16,8 @@ async function main() {
 
   const result = await payments.agents.registerAgentAndPlan(
     {
-      name: "TEXTWEB SUMMARIZE AGENT",
-      description: "Paid TextWeb render + summarize service",
+      name: "TEXTWEB AGENT",
+      description: "Paid TextWeb web-render + summarize service",
     } as AgentMetadata,
     {
       endpoints: [
