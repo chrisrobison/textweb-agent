@@ -17,7 +17,7 @@
     "demo:smoke:deployed": "bash ./scripts/deployed-smoke.sh"
   },
   "dependencies": {
-    "@nevermined-io/payments": "1.1.5",
+    "@nevermined-io/payments": "1.9.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
