@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@nevermined-io/payments": "1.1.5"
+    "@nevermined-io/payments": "1.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
