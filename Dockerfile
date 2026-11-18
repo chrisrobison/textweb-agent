@@ -2,10 +2,12 @@ FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-COPY package.json tsconfig.json .
+# Copy the lockfile and use `npm ci` so image builds install exactly the
+# audited, pinned dependency tree instead of re-resolving ranges on every build.
+COPY package.json package-lock.json tsconfig.json ./
 COPY packages/client/package.json ./packages/client/package.json
 
-RUN npm install
+RUN npm ci
 RUN npx playwright install chromium
 
 COPY . .
