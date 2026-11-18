@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 
 import { env } from '../config/env.js'
 import { assertSafeResolvedAddress, normalizeAndValidateUrl } from './url-safety.js'
+import { classifyElements, type RefElement } from './elements.js'
 
 const require = createRequire(import.meta.url)
 const { AgentBrowser } = require('textweb') as { AgentBrowser: new (opts: any) => any }
@@ -76,23 +77,7 @@ export class TextWebAdapter {
 
   private toRenderedPage(url: string, raw: RawResult, renderMs: number): RenderedPage {
     const elements = raw.elements || {}
-    const links: Array<{ ref: string; text: string; href: string }> = []
-    const interactiveElements: Array<{ ref: string; text: string; semantic: string; selector: string }> = []
-
-    for (const [ref, element] of Object.entries(elements)) {
-      const href = typeof element.href === 'string' ? element.href : ''
-      const text = String(element.text || '').trim()
-      const semantic = String(element.semantic || element.tag || 'unknown')
-      const selector = String(element.selector || '')
-
-      if (href && href.startsWith('http')) {
-        links.push({ ref, text, href })
-      }
-
-      if (element.interactive) {
-        interactiveElements.push({ ref, text, semantic, selector })
-      }
-    }
+    const { links, interactiveElements } = classifyElements(elements as Record<string, RefElement>)
 
     const visibleTextBlocks = this.extractVisibleBlocks(raw.view)
 
