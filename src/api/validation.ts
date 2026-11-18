@@ -26,7 +26,7 @@ const summarizeSchema = z
     goal: z.string().max(4000).optional(),
     mode: z.enum(['brief', 'standard', 'deep']).optional(),
     followLinks: followLinksSchema.optional(),
-    schema: z.record(z.any()).optional(),
+    schema: z.record(z.string(), z.any()).optional(),
     cache: z.boolean().optional(),
   })
   .passthrough()
