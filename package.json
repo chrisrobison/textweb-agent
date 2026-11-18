@@ -37,6 +37,9 @@
   "overrides": {
     "openai": {
       "zod": "$zod"
+    },
+    "@nevermined-io/payments": {
+      "express": "^4.22.3"
     }
   }
 }
